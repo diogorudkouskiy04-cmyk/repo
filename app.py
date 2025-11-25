@@ -12,6 +12,15 @@ from datetime import datetime
 
 def fill_days_in_doodle(doodle, doodle_cleaned, day_row=4, first_column=2):
     table = pd.read_excel(doodle, header=None)
+
+    # --- VALIDATION ---
+    if table.shape[0] <= day_row:
+        raise ValueError("Doodle file does not contain a day row.")
+    if table.shape[1] <= first_column:
+        raise ValueError("Doodle file has too few columns.")
+    if table.loc[day_row, first_column:].isna().all():
+        raise ValueError("Doodle file missing days row content.")
+        
     DAYS = table.loc[day_row, first_column:]
     cleaned = DAYS.replace(["", " ", "nan", "NaN", "None", "none"], pd.NA)
     filled = cleaned.ffill()
