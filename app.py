@@ -364,6 +364,9 @@ if os.path.exists(SAMPLE_IMAGE_PATH):
     st.markdown("**Example calendar screenshot you provided:**")
     st.image(SAMPLE_IMAGE_PATH, use_column_width=True)
 
+# A small helper to show the exact phrasing requested when a file has wrong format
+WRONG_FORMAT_MSG = "this specific document is not on the right format, please input the correct version."
+
 if st.button("Run Scheduling"):
 
     if not (cand_file and int_file and mem_file):
@@ -381,13 +384,63 @@ if st.button("Run Scheduling"):
 
         cand_clean = os.path.join(tmp, "cand_clean.xlsx")
         int_clean = os.path.join(tmp, "int_clean.xlsx")
-        fill_days_in_doodle(cand_path, cand_clean)
-        fill_days_in_doodle(int_path, int_clean)
 
-        cand_table = pd.read_excel(cand_clean, header=None)
-        int_table = pd.read_excel(int_clean, header=None)
-        mem_df = pd.read_excel(mem_path)
+        # Attempt to preprocess doodles; if they raise or appear malformed, show a friendly message
+        try:
+            fill_days_in_doodle(cand_path, cand_clean)
+        except Exception as e:
+            st.error(f"Candidates Doodle: {WRONG_FORMAT_MSG}")
+            st.stop()
 
+        try:
+            fill_days_in_doodle(int_path, int_clean)
+        except Exception as e:
+            st.error(f"Interviewers Doodle: {WRONG_FORMAT_MSG}")
+            st.stop()
+
+        # Read the cleaned files and member sheet
+        try:
+            cand_table = pd.read_excel(cand_clean, header=None)
+        except Exception:
+            st.error(f"Candidates Doodle: {WRONG_FORMAT_MSG}")
+            st.stop()
+
+        try:
+            int_table = pd.read_excel(int_clean, header=None)
+        except Exception:
+            st.error(f"Interviewers Doodle: {WRONG_FORMAT_MSG}")
+            st.stop()
+
+        try:
+            mem_df = pd.read_excel(mem_path)
+        except Exception:
+            st.error(f"Member Info Sheet: {WRONG_FORMAT_MSG}")
+            st.stop()
+
+        # Validate member info columns (common expected columns)
+        required_mem_cols = {"Member Name", "Position", "Semesters at NJC"}
+        if not required_mem_cols.issubset(set(mem_df.columns)):
+            st.error(f"Member Info Sheet: {WRONG_FORMAT_MSG}")
+            st.stop()
+
+        # Quick structural checks for doodle tables: make sure day and time rows have some content
+        try:
+            if cand_table.shape[0] <= 5 or cand_table.shape[1] <= 3 or cand_table.loc[4, 2:].isna().all():
+                st.error(f"Candidates Doodle: {WRONG_FORMAT_MSG}")
+                st.stop()
+        except Exception:
+            st.error(f"Candidates Doodle: {WRONG_FORMAT_MSG}")
+            st.stop()
+
+        try:
+            if int_table.shape[0] <= 5 or int_table.shape[1] <= 3 or int_table.loc[4, 2:].isna().all():
+                st.error(f"Interviewers Doodle: {WRONG_FORMAT_MSG}")
+                st.stop()
+        except Exception:
+            st.error(f"Interviewers Doodle: {WRONG_FORMAT_MSG}")
+            st.stop()
+
+        # If we reach here, files look OK-ish — proceed with parsing/scheduling
         cand_av, _ = parse_doodle(cand_table, skip_names={"NJC"})
         int_av, all_slots_list = parse_doodle(int_table)
 
@@ -567,9 +620,23 @@ if st.button("Run Scheduling"):
 
         # Downloads
         st.download_button("Download schedule.csv", final_schedule.to_csv(index=False), "schedule.csv")
-        st.download_button("Download calendar.csv", cal_df.to_csv(), "calendar.csv")
+
+        # Create an Excel file for the calendar (as requested)
+        try:
+            cal_buf = io.BytesIO()
+            with pd.ExcelWriter(cal_buf, engine='openpyxl') as writer:
+                # write the calendar DataFrame; replace empty strings with NaN so Excel looks cleaner
+                cal_df.replace("", pd.NA).to_excel(writer, index=True, sheet_name='Weekly Calendar')
+            cal_buf.seek(0)
+            st.download_button("Download calendar.xlsx", cal_buf.getvalue(), file_name="calendar.xlsx", mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        except Exception:
+            # fallback to CSV if Excel writer not available
+            st.download_button("Download calendar.csv", cal_df.to_csv(), "calendar.csv")
+
         st.download_button("Download interviewer_summary_full.txt", summary_txt.getvalue(), "interviewer_summary_full.txt")
 
         st.success("Done — schedule, calendar and summaries generated 🎉")
+
+
 
 
