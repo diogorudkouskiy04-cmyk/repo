@@ -369,6 +369,7 @@ WRONG_FORMAT_MSG = "this specific document is not on the right format, please in
 
 if st.button("Run Scheduling"):
 
+    # Validate file uploads
     if not (cand_file and int_file and mem_file):
         st.error("Please upload all files.")
         st.stop()
@@ -377,6 +378,12 @@ if st.button("Run Scheduling"):
         cand_path = os.path.join(tmp, "cand.xlsx")
         int_path = os.path.join(tmp, "int.xlsx")
         mem_path = os.path.join(tmp, "mem.xlsx")
+
+        # Validate file types before saving
+        for uploaded, name in [(cand_file, "Candidates Doodle"), (int_file, "Interviewers Doodle"), (mem_file, "Member Info Sheet")]:
+            if not uploaded.name.lower().endswith(".xlsx"):
+                st.error(f"{name} is not in the right format (.xlsx). Please upload the correct version.")
+                st.stop()
 
         open(cand_path, "wb").write(cand_file.read())
         open(int_path, "wb").write(int_file.read())
@@ -575,7 +582,7 @@ if st.button("Run Scheduling"):
         st.subheader("📝 Interviewer Summary (detailed)")
         st.text_area("Interviewer assignments (text)", value=summary_txt.getvalue(), height=240)
 
-        st.subheader("🗓 Styled Weekly Calendar (Candidate — Interviewer)")
+        st.subheader("🗓 Weekly Calendar (Candidate — Interviewer)")
         # Add a bit of CSS to make the HTML table look nicer
         custom_css = """
         <style>
@@ -619,23 +626,19 @@ if st.button("Run Scheduling"):
         st.markdown(cal_df.to_html(escape=False), unsafe_allow_html=True)
 
         # Downloads
+        # Clean calendar HTML for Excel output
+        import re
+        cal_plain = cal_df.applymap(lambda x: re.sub(r'<[^>]+>', '', str(x)))
+        cal_buffer = io.BytesIO()
+        cal_plain.to_excel(cal_buffer, index=True)
+        cal_buffer.seek(0)
+
         st.download_button("Download schedule.csv", final_schedule.to_csv(index=False), "schedule.csv")
+        st.download_button("Download calendar.xlsx", cal_buffer, "calendar.xlsx")
+        st.download_button("Download interviewer_summary.txt", summary_txt.getvalue(), "interviewer_summary_full.txt")
 
-        # Create an Excel file for the calendar (as requested)
-        try:
-            cal_buf = io.BytesIO()
-            with pd.ExcelWriter(cal_buf, engine='openpyxl') as writer:
-                # write the calendar DataFrame; replace empty strings with NaN so Excel looks cleaner
-                cal_df.replace("", pd.NA).to_excel(writer, index=True, sheet_name='Weekly Calendar')
-            cal_buf.seek(0)
-            st.download_button("Download calendar.xlsx", cal_buf.getvalue(), file_name="calendar.xlsx", mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        except Exception:
-            # fallback to CSV if Excel writer not available
-            st.download_button("Download calendar.csv", cal_df.to_csv(), "calendar.csv")
+        st.success("Done — schedule, calendar and summaries generated 🎉")("Done — schedule, calendar and summaries generated 🎉")
 
-        st.download_button("Download interviewer_summary_full.txt", summary_txt.getvalue(), "interviewer_summary_full.txt")
-
-        st.success("Done — schedule, calendar and summaries generated 🎉")
 
 
 
