@@ -18,7 +18,21 @@ def fill_days_in_doodle(doodle, doodle_cleaned, day_row=4, first_column=2):
     table.loc[day_row, first_column:] = filled
     table.to_excel(doodle_cleaned, index=False, header=False)
 
-def parse_doodle(table, skip_names=None, day_row=4, first_column=2, time_row=5):
+def parse_doodle(df, skip_names=None):
+    # --- Added validation to prevent crashes on wrong file uploads ---
+    required_cols = {"Day", "Time"}
+    if not required_cols.issubset(set(df.columns)):
+        raise ValueError(
+            "The uploaded Doodle file is not in the correct format. It must contain columns: 'Day' and 'Time'."
+        )
+
+    skip_names = skip_names or set()
+
+    # Ensure Day and Time are strings before concatenation
+    days = df["Day"].astype(str)
+    times = df["Time"].astype(str)
+
+    slots = (days + " " + times).tolist()(table, skip_names=None, day_row=4, first_column=2, time_row=5):
     if skip_names is None:
         skip_names = set()
 
@@ -638,8 +652,6 @@ if st.button("Run Scheduling"):
         st.download_button("Download interviewer_summary.txt", summary_txt.getvalue(), "interviewer_summary_full.txt")
 
         st.success("Done — schedule, calendar and summaries generated 🎉")("Done — schedule, calendar and summaries generated 🎉")
-
-
 
 
 
