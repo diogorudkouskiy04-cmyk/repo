@@ -414,6 +414,25 @@ def build_excel_calendar(assignments):
     return df
 
 # -----------------------
+# Slot parsing helper
+# -----------------------
+def parse_slot_to_day_time(slot_str):
+    """
+    Convert a slot string like "Monday 09:00 AM" into day and time.
+    Returns (day, time) or (None, None) if parsing fails.
+    """
+    if not isinstance(slot_str, str) or not slot_str.strip():
+        return None, None
+    parts = slot_str.strip().split(maxsplit=1)
+    if len(parts) == 2:
+        day_raw, time_raw = parts
+        day = WEEKDAY_MAP.get(day_raw, day_raw)
+        time = time_raw
+        return day, time
+    else:
+        return parts[0], None
+
+# -----------------------
 # Streamlit UI / Flow
 # -----------------------
 SAMPLE_IMAGE_PATH = "/mnt/data/Screenshot 2025-11-23 at 16.38.00.png"
