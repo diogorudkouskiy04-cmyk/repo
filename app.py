@@ -604,9 +604,17 @@ if st.button("Run Scheduling"):
                     add_summary(row.get("Junior1"), row.get("Candidate"), row.get("Slot"))
                     add_summary(row.get("Junior2"), row.get("Candidate"), row.get("Slot"))
 
-        workload_df = pd.DataFrame([{"Interviewer": k, "Total Interviews": v} for k, v in workload.items()]).sort_values("Total Interviews", ascending=False)
-        if workload_df.empty:
-            workload_df = pd.DataFrame(columns=["Interviewer", "Total Interviews"])
+            if not workload:
+                st.warning("No valid interview assignments found. The calendar may be empty due to an incorrect Doodle file.")
+                workload_df = pd.DataFrame(columns=["Interviewer", "Total Interviews"])
+            else:
+                workload_df = (
+                    pd.DataFrame(
+                        [{"Interviewer": k, "Total Interviews": v} for k, v in workload.items()]
+                    )
+                    .sort_values("Total Interviews", ascending=False)
+                    .reset_index(drop=True)
+                )
 
         # create interviewer summary text
         summary_txt = io.StringIO()
