@@ -26,10 +26,43 @@ WEEKDAY_MAP = {
     "Mon": "Monday", "Tue": "Tuesday", "Wed": "Wednesday",
     "Thu": "Thursday", "Fri": "Friday", "Sat": "Saturday",
     "Sun": "Sunday",
-    "Monday":"Monday","Tuesday":"Tuesday","Wednesday":"Wednesday",
-    "Thursday":"Thursday","Friday":"Friday","Saturday":"Saturday",
-    "Sunday":"Sunday"
+    "Monday": "Monday", "Tuesday": "Tuesday", "Wednesday": "Wednesday",
+    "Thursday": "Thursday", "Friday": "Friday", "Saturday": "Saturday",
+    "Sunday": "Sunday"
 }
+
+def parse_slot_to_day_time(slot_text):
+    """
+    Returns (day_name, 'HH:MM') given a slot like "Mon 9:00 AM" or "Monday 09:00".
+    If it can't parse day or time, returns (None, None).
+    """
+    if not isinstance(slot_text, str) or not slot_text.strip():
+        return None, None
+
+    s = " ".join(slot_text.split())
+    tokens = s.split()
+    day_token = tokens[0].rstrip(",")
+    day = WEEKDAY_MAP.get(day_token, None)
+
+    # Try AM/PM
+    m = time_re.search(s)
+    if m:
+        time_str = m.group(1).upper().replace(" ", "")
+        time_str = re.sub(r'([AP]M)$', r' \1', time_str)
+        try:
+            dt = datetime.strptime(time_str, "%I:%M %p")
+            return day, dt.strftime("%H:%M")
+        except:
+            return day, None
+
+    # fallback: 24h hh:mm
+    m2 = re.search(r'(\d{1,2}:\d{2})', s)
+    if m2:
+        parts = m2.group(1).split(":")
+        return day, parts[0].zfill(2) + ":" + parts[1][:2]
+
+    return day, None
+
 
 def looks_like_member_sheet(df):
     """
@@ -51,7 +84,7 @@ def looks_like_member_sheet(df):
     return False
 
 # -----------------------
-# NEW VALIDATION HELPERS
+# VALIDATION HELPERS
 # -----------------------
 
 def _row_slice(df, row_idx):
@@ -194,8 +227,8 @@ def fill_days_in_doodle(doodle_path, doodle_cleaned_path, day_row=DAY_ROW, first
     time_series = table.loc[day_row + 1, first_column:]
 
     # coerce to strings and normalize blanks
-    day_series = day_series.fillna("").astype(str).replace(["nan","NaN","None","none"], "")
-    time_series = time_series.fillna("").astype(str).replace(["nan","NaN","None","none"], "")
+    day_series = day_series.fillna("").astype(str).replace(["nan", "NaN", "None", "none"], "")
+    time_series = time_series.fillna("").astype(str).replace(["nan", "NaN", "None", "none"], "")
 
     if day_series.str.strip().eq("").all():
         raise ValueError("Doodle file missing days row content.")
@@ -282,7 +315,7 @@ def parse_doodle(table, skip_names=None, day_row=DAY_ROW, first_column=FIRST_COL
     return availability, slots
 
 # -----------------------
-# Classification & scheduling
+# Classification & scheduling (with back-to-back option)
 # -----------------------
 def classify_interviewers(interviewer_availability, member_info):
     seniors, juniors = [], []
@@ -332,74 +365,179 @@ def compute_slot_strength(seniors, juniors, interviewer_slots):
 
 def schedule_interviews(candidate_availability, seniors, juniors,
                         interviewer_slots, interviewer_yes, interviewer_ifnb,
-                        all_slots, slot_strength):
+                        all_slots, slot_strength, allow_back_to_back=True):
+    """
+    If allow_back_to_back = False, the same interviewer will not be scheduled in
+    two slots that are within 60 minutes of each other on the same day.
+    """
     def sort_slots(slots):
-        return sorted([s for s in slots if isinstance(s, str) and s.strip()],
-                      key=lambda s: slot_strength.get(s, 0), reverse=True)
+        return sorted(
+            [s for s in slots if isinstance(s, str) and s.strip()],
+            key=lambda s: slot_strength.get(s, 0),
+            reverse=True
+        )
 
+    def slot_to_day_minutes(slot):
+        day, t = parse_slot_to_day_time(slot)
+        if day is None or t is None:
+            return None, None
+        try:
+            h, m = t.split(":")
+            return day, int(h) * 60 + int(m)
+        except Exception:
+            return day, None
+
+    interviewer_calendar = {name: [] for name in seniors + juniors}
     booked_s = {slot: set() for slot in all_slots}
     booked_j = {slot: set() for slot in all_slots}
     load = {name: 0 for name in seniors + juniors}
     results = []
 
+    def can_take_slot(name, slot):
+        if allow_back_to_back:
+            return True
+        day, minutes = slot_to_day_minutes(slot)
+        if day is None or minutes is None:
+            # if we can't parse, don't block it
+            return True
+        for d_existing, m_existing in interviewer_calendar.get(name, []):
+            if d_existing == day and abs(m_existing - minutes) <= 60:
+                # same day and within 60 minutes (including exact back-to-back)
+                return False
+        return True
+
+    def register_slot(name, slot):
+        day, minutes = slot_to_day_minutes(slot)
+        if day is None or minutes is None:
+            return
+        interviewer_calendar.setdefault(name, []).append((day, minutes))
+
     for candidate, cdata in candidate_availability.items():
         cand_slots_sorted = sort_slots(cdata.get("yes", []) + cdata.get("ifnb", []))
         for slot in cand_slots_sorted:
-            s_yes = [s for s in seniors if slot in interviewer_yes.get(s, set()) and s not in booked_s.get(slot, set())]
-            j_yes = [j for j in juniors if slot in interviewer_yes.get(j, set()) and j not in booked_j.get(slot, set())]
-            s_ifnb = [s for s in seniors if slot in interviewer_ifnb.get(s, set()) and s not in booked_s.get(slot, set())]
-            j_ifnb = [j for j in juniors if slot in interviewer_ifnb.get(j, set()) and j not in booked_j.get(slot, set())]
+            # Filter lists with both availability and back-to-back constraint
+            s_yes = [
+                s for s in seniors
+                if slot in interviewer_yes.get(s, set())
+                and s not in booked_s.get(slot, set())
+                and can_take_slot(s, slot)
+            ]
+            j_yes = [
+                j for j in juniors
+                if slot in interviewer_yes.get(j, set())
+                and j not in booked_j.get(slot, set())
+                and can_take_slot(j, slot)
+            ]
+            s_ifnb = [
+                s for s in seniors
+                if slot in interviewer_ifnb.get(s, set())
+                and s not in booked_s.get(slot, set())
+                and can_take_slot(s, slot)
+            ]
+            j_ifnb = [
+                j for j in juniors
+                if slot in interviewer_ifnb.get(j, set())
+                and j not in booked_j.get(slot, set())
+                and can_take_slot(j, slot)
+            ]
 
             for lst in [s_yes, j_yes, s_ifnb, j_ifnb]:
                 lst.sort(key=lambda x: load.get(x, 0))
 
+            # Senior + Junior YES
             if s_yes and j_yes:
                 S, J = s_yes[0], j_yes[0]
-                booked_s.setdefault(slot, set()).add(S); booked_j.setdefault(slot, set()).add(J)
-                load[S] = load.get(S, 0) + 1; load[J] = load.get(J, 0) + 1
-                results.append({"Candidate": candidate, "Email": cdata.get("email"),
-                                "Slot": slot, "Team Type": "Senior + Junior (YES)",
-                                "Senior1": S, "Senior2": None, "Junior1": J, "Junior2": None})
+                booked_s.setdefault(slot, set()).add(S)
+                booked_j.setdefault(slot, set()).add(J)
+                load[S] = load.get(S, 0) + 1
+                load[J] = load.get(J, 0) + 1
+                register_slot(S, slot)
+                register_slot(J, slot)
+                results.append({
+                    "Candidate": candidate,
+                    "Email": cdata.get("email"),
+                    "Slot": slot,
+                    "Team Type": "Senior + Junior (YES)",
+                    "Senior1": S, "Senior2": None,
+                    "Junior1": J, "Junior2": None
+                })
                 break
 
+            # Senior + Senior YES
             if len(s_yes) >= 2:
                 S1, S2 = s_yes[:2]
                 booked_s.setdefault(slot, set()).update({S1, S2})
-                load[S1] = load.get(S1, 0) + 1; load[S2] = load.get(S2, 0) + 1
-                results.append({"Candidate": candidate, "Email": cdata.get("email"),
-                                "Slot": slot, "Team Type": "Senior + Senior (YES)",
-                                "Senior1": S1, "Senior2": S2, "Junior1": None, "Junior2": None})
+                load[S1] = load.get(S1, 0) + 1
+                load[S2] = load.get(S2, 0) + 1
+                register_slot(S1, slot)
+                register_slot(S2, slot)
+                results.append({
+                    "Candidate": candidate,
+                    "Email": cdata.get("email"),
+                    "Slot": slot,
+                    "Team Type": "Senior + Senior (YES)",
+                    "Senior1": S1, "Senior2": S2,
+                    "Junior1": None, "Junior2": None
+                })
                 break
 
+            # Senior + Junior fallback
             s_mix = s_yes + s_ifnb
             j_mix = j_yes + j_ifnb
             if s_mix and j_mix:
                 S = sorted(s_mix, key=lambda x: load.get(x, 0))[0]
                 J = sorted(j_mix, key=lambda x: load.get(x, 0))[0]
-                booked_s.setdefault(slot, set()).add(S); booked_j.setdefault(slot, set()).add(J)
-                load[S] = load.get(S, 0) + 1; load[J] = load.get(J, 0) + 1
-                results.append({"Candidate": candidate, "Email": cdata.get("email"),
-                                "Slot": slot, "Team Type": "Senior + Junior (fallback)",
-                                "Senior1": S, "Senior2": None, "Junior1": J, "Junior2": None})
+                booked_s.setdefault(slot, set()).add(S)
+                booked_j.setdefault(slot, set()).add(J)
+                load[S] = load.get(S, 0) + 1
+                load[J] = load.get(J, 0) + 1
+                register_slot(S, slot)
+                register_slot(J, slot)
+                results.append({
+                    "Candidate": candidate,
+                    "Email": cdata.get("email"),
+                    "Slot": slot,
+                    "Team Type": "Senior + Junior (fallback)",
+                    "Senior1": S, "Senior2": None,
+                    "Junior1": J, "Junior2": None
+                })
                 break
 
+            # Senior + Senior fallback
             if len(s_mix) >= 2:
                 S1, S2 = sorted(s_mix, key=lambda x: load.get(x, 0))[:2]
                 booked_s.setdefault(slot, set()).update({S1, S2})
-                load[S1] = load.get(S1, 0) + 1; load[S2] = load.get(S2, 0) + 1
-                results.append({"Candidate": candidate, "Email": cdata.get("email"),
-                                "Slot": slot, "Team Type": "Senior + Senior (fallback)",
-                                "Senior1": S1, "Senior2": S2, "Junior1": None, "Junior2": None})
+                load[S1] = load.get(S1, 0) + 1
+                load[S2] = load.get(S2, 0) + 1
+                register_slot(S1, slot)
+                register_slot(S2, slot)
+                results.append({
+                    "Candidate": candidate,
+                    "Email": cdata.get("email"),
+                    "Slot": slot,
+                    "Team Type": "Senior + Senior (fallback)",
+                    "Senior1": S1, "Senior2": S2,
+                    "Junior1": None, "Junior2": None
+                })
                 break
 
+            # Junior + Junior fallback
             jj_mix = j_yes + j_ifnb
             if len(jj_mix) >= 2:
                 J1, J2 = sorted(jj_mix, key=lambda x: load.get(x, 0))[:2]
                 booked_j.setdefault(slot, set()).update({J1, J2})
-                load[J1] = load.get(J1, 0) + 1; load[J2] = load.get(J2, 0) + 1
-                results.append({"Candidate": candidate, "Email": cdata.get("email"),
-                                "Slot": slot, "Team Type": "Junior + Junior (fallback)",
-                                "Senior1": None, "Senior2": None, "Junior1": J1, "Junior2": J2})
+                load[J1] = load.get(J1, 0) + 1
+                load[J2] = load.get(J2, 0) + 1
+                register_slot(J1, slot)
+                register_slot(J2, slot)
+                results.append({
+                    "Candidate": candidate,
+                    "Email": cdata.get("email"),
+                    "Slot": slot,
+                    "Team Type": "Junior + Junior (fallback)",
+                    "Senior1": None, "Senior2": None,
+                    "Junior1": J1, "Junior2": J2
+                })
                 break
 
     return pd.DataFrame(results)
@@ -412,7 +550,8 @@ split_pattern = re.compile(r"\s*&\s*|\s*/\s*|\s*,\s*")
 
 def build_weekly_calendar(assignments, weekdays=None):
     if weekdays is None:
-        weekdays = ["Monday","Tuesday","Wednesday","Thursday","Friday"]
+        weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+
     def normalize_time(t):
         if not isinstance(t, str) or not t:
             return None
@@ -446,7 +585,7 @@ def build_weekly_calendar(assignments, weekdays=None):
                 cleaned.append(None)
                 cleaned.append(m)
             last = m
-        times = [(f"{m//60:02d}:{m%60:02d}") if m is not None else "" for m in cleaned]
+        times = [(f"{m // 60:02d}:{m % 60:02d}") if m is not None else "" for m in cleaned]
 
     table = pd.DataFrame("", index=times, columns=weekdays)
     buckets = {d: {t: [] for t in times} for d in weekdays}
@@ -470,8 +609,8 @@ def build_weekly_calendar(assignments, weekdays=None):
             bg = PALETTE[(slot_index + i) % len(PALETTE)]
             candidate_clean = str(e["candidate"]).replace("\n", " ").strip()
             panel_clean = [p.replace("\n", " ").strip() for p in e["panel"]]
-            cand_html = (f"<div style='font-weight:700;color:#183a6e;margin-bottom:4px'>{candidate_clean}</div>")
-            panel_html = ("<div style='color:#333;font-size:13px;margin-bottom:2px;'>" + " / ".join(panel_clean) + "</div>")
+            cand_html = f"<div style='font-weight:700;color:#183a6e;margin-bottom:4px'>{candidate_clean}</div>"
+            panel_html = "<div style='color:#333;font-size:13px;margin-bottom:2px;'>" + " / ".join(panel_clean) + "</div>"
             block = (
                 f"<div style='background:{bg};padding:10px;margin-bottom:8px;"
                 f"border-radius:10px;border:1px solid rgba(0,0,0,0.06);"
@@ -505,7 +644,7 @@ def build_excel_calendar(assignments):
         if col not in df.columns:
             df[col] = pd.NA
 
-    day_order = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+    day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     df["DayOrder"] = df["Day"].apply(lambda x: day_order.index(x) if str(x) in day_order else 999)
 
     def time_to_minutes(t):
@@ -524,52 +663,6 @@ def build_excel_calendar(assignments):
     return df
 
 # -----------------------
-# Slot parsing helper
-# -----------------------
-time_re = re.compile(r'(\d{1,2}:\d{2}\s*[APap][Mm])')
-WEEKDAY_MAP = {
-    "Mon": "Monday", "Tue": "Tuesday", "Wed": "Wednesday",
-    "Thu": "Thursday", "Fri": "Friday", "Sat": "Saturday",
-    "Sun": "Sunday",
-    "Monday":"Monday","Tuesday":"Tuesday","Wednesday":"Wednesday",
-    "Thursday":"Thursday","Friday":"Friday","Saturday":"Saturday",
-    "Sunday":"Sunday"
-}
-
-def parse_slot_to_day_time(slot_text):
-    """
-    Returns (day_name, 'HH:MM') given a slot like "Mon 9:00 AM" or "Monday 09:00".
-    If it can't parse day or time, returns (None, None).
-    """
-    if not isinstance(slot_text, str) or not slot_text.strip():
-        return None, None
-
-    s = " ".join(slot_text.split())
-    tokens = s.split()
-    day_token = tokens[0].rstrip(",")
-    day = WEEKDAY_MAP.get(day_token, None)
-
-    # Try AM/PM
-    m = time_re.search(s)
-    if m:
-        time_str = m.group(1).upper().replace(" ", "")
-        time_str = re.sub(r'([AP]M)$', r' \1', time_str)
-        try:
-            dt = datetime.strptime(time_str, "%I:%M %p")
-            return day, dt.strftime("%H:%M")
-        except:
-            return day, None
-
-    # fallback: 24h hh:mm
-    m2 = re.search(r'(\d{1,2}:\d{2})', s)
-    if m2:
-        parts = m2.group(1).split(":")
-        return day, parts[0].zfill(2) + ":" + parts[1][:2]
-
-    return day, None
-
-
-# -----------------------
 # Streamlit UI / Flow
 # -----------------------
 SAMPLE_IMAGE_PATH = "/mnt/data/Screenshot 2025-11-23 at 16.38.00.png"
@@ -585,6 +678,14 @@ with col2:
     int_file = st.file_uploader("Upload Interviewers Doodle", type=["xlsx"])
 with col3:
     mem_file = st.file_uploader("Upload Member Info Sheet", type=["xlsx"])
+
+# New: back-to-back interviews option
+back_to_back_choice = st.radio(
+    "Can interviewers do back-to-back interviews (e.g., 13:00 then 14:00)?",
+    ["Yes", "No"],
+    index=0
+)
+allow_back_to_back = (back_to_back_choice == "Yes")
 
 if os.path.exists(SAMPLE_IMAGE_PATH):
     st.markdown("**Example calendar screenshot you provided:**")
@@ -806,7 +907,8 @@ if st.button("Run Scheduling"):
         schedule = schedule_interviews(
             cand_av, seniors, juniors,
             inter_slots, inter_yes, inter_ifnb,
-            all_slots, slot_strength
+            all_slots, slot_strength,
+            allow_back_to_back=allow_back_to_back
         )
 
         # Merge teams
@@ -871,7 +973,6 @@ if st.button("Run Scheduling"):
 
         # workload DataFrame (guard empty)
         if not workload:
-            st.warning("No valid interview assignments found. The calendar may be empty due to incorrect Doodle files.")
             workload_df = pd.DataFrame(columns=["Interviewer", "Total Interviews"])
         else:
             workload_df = (
@@ -907,68 +1008,81 @@ if st.button("Run Scheduling"):
                 "interviewer": interviewer_text
             })
 
-        # if no assignments -> show message and stop early (prevents calendar errors)
-        if not assignments:
-            st.warning("No assignments could be produced from the provided files. Check Doodle availability and member info.")
-            # still display schedule/workload (empty or partial)
-            st.subheader("📄 Final Schedule Table")
-            st.dataframe(final_schedule, use_container_width=True)
-            st.subheader("🗂 Interviewer Workload")
-            st.dataframe(workload_df, use_container_width=True)
-            st.subheader("📝 Interviewer Summary (detailed)")
-            st.text_area("Interviewer assignments (text)", value=summary_txt.getvalue(), height=240)
-            st.success("Finished with warnings — no calendar generated.")
-            st.stop()
-
-        # Determine weekday columns to show
-        present_days = sorted({a["day"] for a in assignments if a["day"] is not None},
-                              key=lambda d: ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].index(d) if d in ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"] else 999)
-        weekdays = [d for d in ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"] if d in present_days]
-        if not weekdays:
-            weekdays = ["Monday","Tuesday","Wednesday","Thursday","Friday"]
-
-        cal_df = build_weekly_calendar(assignments, weekdays=weekdays)
         excel_cal = build_excel_calendar(assignments)
 
+        # Determine weekday columns to show
+        if assignments:
+            present_days = sorted(
+                {a["day"] for a in assignments if a["day"] is not None},
+                key=lambda d: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].index(d)
+                if d in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] else 999
+            )
+            weekdays = [d for d in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                        if d in present_days]
+            if not weekdays:
+                weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+
+            cal_df = build_weekly_calendar(assignments, weekdays=weekdays)
+        else:
+            cal_df = None
+
         # -----------------------
-        # Display
+        # Display in tabs
         # -----------------------
-        st.subheader("📄 Final Schedule Table")
-        st.dataframe(final_schedule, use_container_width=True)
+        tab_schedule, tab_workload, tab_summary, tab_calendar, tab_downloads = st.tabs([
+            "Final Schedule Table",
+            "Interviewer Workload",
+            "Interviewer Summary (detailed)",
+            "Styled Weekly Calendar",
+            "Downloads"
+        ])
 
-        st.subheader("🗂 Interviewer Workload")
-        st.dataframe(workload_df, use_container_width=True)
+        with tab_schedule:
+            st.subheader("📄 Final Schedule Table")
+            st.dataframe(final_schedule, use_container_width=True)
 
-        st.subheader("📝 Interviewer Summary (detailed)")
-        st.text_area("Interviewer assignments (text)", value=summary_txt.getvalue(), height=240)
+        with tab_workload:
+            st.subheader("🗂 Interviewer Workload")
+            st.dataframe(workload_df, use_container_width=True)
 
-        st.subheader("🗓 Styled Weekly Calendar (Candidate — Interviewer)")
-        custom_css = """
-        <style>
-        table { border-collapse: separate; border-spacing: 14px 10px; width: 100%; }
-        th { text-align: center; background: #f7f9fc; border-radius: 8px; padding: 10px; font-size: 15px; font-weight: 700; color: #0d2a56; }
-        td { background: #ffffff; border-radius: 10px; vertical-align: top; padding: 8px; min-width: 180px; border: 1px solid rgba(0,0,0,0.05); }
-        tr:nth-child(even) td { background: #fafbfd; }
-        @media (max-width: 800px) { th { font-size: 13px; padding: 8px; } td { padding: 6px; min-width: 120px; } }
-        </style>
-        """
-        st.markdown(custom_css, unsafe_allow_html=True)
-        st.markdown(cal_df.to_html(escape=False), unsafe_allow_html=True)
+        with tab_summary:
+            st.subheader("📝 Interviewer Summary (detailed)")
+            st.text_area("Interviewer assignments (text)", value=summary_txt.getvalue(), height=240)
 
-        # Downloads
-        st.download_button("Download schedule.csv", final_schedule.to_csv(index=False), "schedule.csv", mime="text/csv")
+        with tab_calendar:
+            st.subheader("🗓 Styled Weekly Calendar (Candidate — Interviewer)")
+            if cal_df is None or cal_df.empty:
+                st.info("No calendar could be generated from the provided files.")
+            else:
+                custom_css = """
+                <style>
+                table { border-collapse: separate; border-spacing: 14px 10px; width: 100%; }
+                th { text-align: center; background: #f7f9fc; border-radius: 8px; padding: 10px; font-size: 15px; font-weight: 700; color: #0d2a56; }
+                td { background: #ffffff; border-radius: 10px; vertical-align: top; padding: 8px; min-width: 180px; border: 1px solid rgba(0,0,0,0.05); }
+                tr:nth-child(even) td { background: #fafbfd; }
+                @media (max-width: 800px) { th { font-size: 13px; padding: 8px; min-width: 120px; } td { padding: 6px; min-width: 120px; } }
+                </style>
+                """
+                st.markdown(custom_css, unsafe_allow_html=True)
+                st.markdown(cal_df.to_html(escape=False), unsafe_allow_html=True)
 
-        try:
-            cal_buf = io.BytesIO()
-            with pd.ExcelWriter(cal_buf, engine='openpyxl') as writer:
-                excel_cal.to_excel(writer, index=False, sheet_name='Weekly Calendar')
-            cal_buf.seek(0)
-            st.download_button("Download calendar.xlsx", cal_buf.getvalue(),
-                               file_name="calendar.xlsx",
-                               mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        except Exception:
-            st.download_button("Download calendar.csv", excel_cal.to_csv(index=False), "calendar.csv", mime="text/csv")
+        with tab_downloads:
+            st.subheader("⬇️ Downloads")
+            st.download_button("Download schedule.csv", final_schedule.to_csv(index=False), "schedule.csv", mime="text/csv")
 
-        st.download_button("Download interviewer_summary_full.txt", summary_txt.getvalue(), "interviewer_summary_full.txt", mime="text/plain")
+            try:
+                cal_buf = io.BytesIO()
+                with pd.ExcelWriter(cal_buf, engine='openpyxl') as writer:
+                    excel_cal.to_excel(writer, index=False, sheet_name='Weekly Calendar')
+                cal_buf.seek(0)
+                st.download_button("Download calendar.xlsx", cal_buf.getvalue(),
+                                   file_name="calendar.xlsx",
+                                   mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            except Exception:
+                st.download_button("Download calendar.csv", excel_cal.to_csv(index=False), "calendar.csv", mime="text/csv")
+
+            st.download_button("Download interviewer_summary_full.txt", summary_txt.getvalue(),
+                               "interviewer_summary_full.txt", mime="text/plain")
 
         st.success("Done — schedule, calendar and summaries generated 🎉")
+
