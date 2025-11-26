@@ -416,21 +416,48 @@ def build_excel_calendar(assignments):
 # -----------------------
 # Slot parsing helper
 # -----------------------
-def parse_slot_to_day_time(slot_str):
+time_re = re.compile(r'(\d{1,2}:\d{2}\s*[APap][Mm])')
+WEEKDAY_MAP = {
+    "Mon": "Monday", "Tue": "Tuesday", "Wed": "Wednesday",
+    "Thu": "Thursday", "Fri": "Friday", "Sat": "Saturday",
+    "Sun": "Sunday",
+    "Monday":"Monday","Tuesday":"Tuesday","Wednesday":"Wednesday",
+    "Thursday":"Thursday","Friday":"Friday","Saturday":"Saturday",
+    "Sunday":"Sunday"
+}
+
+def parse_slot_to_day_time(slot_text):
     """
-    Convert a slot string like "Monday 09:00 AM" into day and time.
-    Returns (day, time) or (None, None) if parsing fails.
+    Returns (day_name, 'HH:MM') given a slot like "Mon 9:00 AM" or "Monday 09:00".
+    If it can't parse day or time, returns (None, None).
     """
-    if not isinstance(slot_str, str) or not slot_str.strip():
+    if not isinstance(slot_text, str) or not slot_text.strip():
         return None, None
-    parts = slot_str.strip().split(maxsplit=1)
-    if len(parts) == 2:
-        day_raw, time_raw = parts
-        day = WEEKDAY_MAP.get(day_raw, day_raw)
-        time = time_raw
-        return day, time
-    else:
-        return parts[0], None
+
+    s = " ".join(slot_text.split())
+    tokens = s.split()
+    day_token = tokens[0].rstrip(",")
+    day = WEEKDAY_MAP.get(day_token, None)
+
+    # Try AM/PM
+    m = time_re.search(s)
+    if m:
+        time_str = m.group(1).upper().replace(" ", "")
+        time_str = re.sub(r'([AP]M)$', r' \1', time_str)
+        try:
+            dt = datetime.strptime(time_str, "%I:%M %p")
+            return day, dt.strftime("%H:%M")
+        except:
+            return day, None
+
+    # fallback: 24h hh:mm
+    m2 = re.search(r'(\d{1,2}:\d{2})', s)
+    if m2:
+        parts = m2.group(1).split(":")
+        return day, parts[0].zfill(2) + ":" + parts[1][:2]
+
+    return day, None
+
 
 # -----------------------
 # Streamlit UI / Flow
