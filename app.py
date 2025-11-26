@@ -90,15 +90,22 @@ def _looks_like_time_row(ser):
 
 
 def _has_availability_answers(df):
-    """True if any cell from row 6 down and FIRST_COL rightwards contains YES/IF NEED BE etc."""
+    """
+    True if any non-empty cell exists in the availability region
+    (rows 6+ and columns from FIRST_COL onward).
+    We deliberately treat ANY non-empty value as availability, to match
+    how real Doodle exports behave and how parse_doodle later interprets them.
+    """
     if df.shape[0] <= 6 or df.shape[1] <= FIRST_COL:
         return False
     try:
         sub = df.iloc[6:, FIRST_COL:]
-        vals = sub.astype(str).str.upper().values.flatten()
+        vals = sub.astype(str).values.flatten()
         for v in vals:
-            v = v.strip()
-            if v in ("YES", "IF NEED BE", "IF NEEDED", "IF NEED", "IFNEEDBE"):
+            if v is None:
+                continue
+            v_str = str(v).strip()
+            if v_str and v_str.lower() not in ("nan", "none"):
                 return True
     except Exception:
         return False
@@ -117,7 +124,7 @@ def validate_doodle_structure(df):
         "structure": "enough rows and columns (at least 6 rows and 3 columns)",
         "day": "a day row with weekday labels (e.g., Mon, Tue, Wed)",
         "time": "a time row with times (e.g., 9:00 AM or 09:00)",
-        "answers": "availability cells with answers YES / IF NEED BE",
+        "answers": "availability cells (non-empty values in participant rows)",
     }
 
     has_structure = df.shape[0] >= MIN_ROWS and df.shape[1] > FIRST_COL
@@ -275,7 +282,7 @@ def parse_doodle(table, skip_names=None, day_row=DAY_ROW, first_column=FIRST_COL
     return availability, slots
 
 # -----------------------
-# Classification & scheduling (unchanged logic, but robust lookups)
+# Classification & scheduling
 # -----------------------
 def classify_interviewers(interviewer_availability, member_info):
     seniors, juniors = [], []
@@ -619,7 +626,7 @@ if st.button("Run Scheduling"):
                     "- enough rows and columns (at least 6 rows and 3 columns)\n"
                     "- a day row with weekday labels (e.g., Mon, Tue, Wed)\n"
                     "- a time row with times (e.g., 9:00 AM or 09:00)\n"
-                    "- availability cells with answers YES / IF NEED BE"
+                    "- availability cells (non-empty values in participant rows)"
                 )
             else:
                 st.error(
@@ -628,7 +635,7 @@ if st.button("Run Scheduling"):
                     "- enough rows and columns (at least 6 rows and 3 columns)\n"
                     "- a day row with weekday labels (e.g., Mon, Tue, Wed)\n"
                     "- a time row with times (e.g., 9:00 AM or 09:00)\n"
-                    "- availability cells with answers YES / IF NEED BE\n\n"
+                    "- availability cells (non-empty values in participant rows)\n\n"
                     "Your file **seems to contain**:\n"
                     + "".join(f"- {item}\n" for item in present_cand) +
                     "\nBut it is **missing**:\n"
@@ -651,7 +658,7 @@ if st.button("Run Scheduling"):
                     "- enough rows and columns (at least 6 rows and 3 columns)\n"
                     "- a day row with weekday labels (e.g., Mon, Tue, Wed)\n"
                     "- a time row with times (e.g., 9:00 AM or 09:00)\n"
-                    "- availability cells with answers YES / IF NEED BE"
+                    "- availability cells (non-empty values in participant rows)"
                 )
             else:
                 st.error(
@@ -660,7 +667,7 @@ if st.button("Run Scheduling"):
                     "- enough rows and columns (at least 6 rows and 3 columns)\n"
                     "- a day row with weekday labels (e.g., Mon, Tue, Wed)\n"
                     "- a time row with times (e.g., 9:00 AM or 09:00)\n"
-                    "- availability cells with answers YES / IF NEED BE\n\n"
+                    "- availability cells (non-empty values in participant rows)\n\n"
                     "Your file **seems to contain**:\n"
                     + "".join(f"- {item}\n" for item in present_int) +
                     "\nBut it is **missing**:\n"
