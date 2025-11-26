@@ -17,14 +17,6 @@ MIN_ROWS = 6        # minimal rows expected in a Doodle sheet (best-effort)
 WRONG_FORMAT_MSG = "this specific document is not on the right format, please input the correct version."
 REQUIRED_MEM_COLS = {"Member Name", "Position", "Semesters at NJC"}
 
-# Components we expect in a valid Doodle sheet (for human-friendly messages)
-REQUIRED_DOODLE_COMPONENTS = [
-    "a day row with weekday labels (e.g., Mon, Tue, ...)",
-    "a time row with times (e.g., 9:00 AM)",
-    "enough rows and columns (at least 6 rows and 3 columns)",
-    "availability cells with answers YES / IF NEED BE",
-]
-
 # -----------------------
 # Utilities
 # -----------------------
@@ -51,8 +43,6 @@ def looks_like_member_sheet(df):
             for required in REQUIRED_MEM_COLS:
                 if any(required.lower() in (str(v)) for v in colvals):
                     return True
-        # also check column names if present as strings in headerless files some people upload differently
-        # (not super-reliable but an extra guard)
         flat = " ".join(" ".join(row) for row in text.values.tolist())
         if any(req.lower() in flat for req in REQUIRED_MEM_COLS):
             return True
@@ -60,86 +50,110 @@ def looks_like_member_sheet(df):
         return False
     return False
 
+# -----------------------
+# NEW VALIDATION HELPERS
+# -----------------------
 
-# -----------------------
-# NEW: Doodle structural validation
-# -----------------------
-def validate_doodle_structure(df, file_label="Doodle file"):
+def _row_slice(df, row_idx):
+    """Safely slice a row from FIRST_COL onwards; return None if out of bounds."""
+    if row_idx >= df.shape[0] or df.shape[1] <= FIRST_COL:
+        return None
+    return df.iloc[row_idx, FIRST_COL:]
+
+
+def _looks_like_weekday_row(ser):
+    """True if any cell in the series starts with a weekday token."""
+    if ser is None:
+        return False
+    vals = ser.astype(str).str.strip()
+    for v in vals:
+        if not v or v.lower() == "nan":
+            continue
+        first = v.split()[0].rstrip(",")
+        if first in WEEKDAY_MAP:
+            return True
+    return False
+
+
+def _looks_like_time_row(ser):
+    """True if any cell in the series contains a hh:mm (with or without AM/PM)."""
+    if ser is None:
+        return False
+    vals = ser.astype(str).str.strip()
+    time_pattern = re.compile(r"\b\d{1,2}:\d{2}\b")
+    for v in vals:
+        if not v or v.lower() == "nan":
+            continue
+        if time_re.search(v) or time_pattern.search(v):
+            return True
+    return False
+
+
+def _has_availability_answers(df):
+    """True if any cell from row 6 down and FIRST_COL rightwards contains YES/IF NEED BE etc."""
+    if df.shape[0] <= 6 or df.shape[1] <= FIRST_COL:
+        return False
+    try:
+        sub = df.iloc[6:, FIRST_COL:]
+        vals = sub.astype(str).str.upper().values.flatten()
+        for v in vals:
+            v = v.strip()
+            if v in ("YES", "IF NEED BE", "IF NEEDED", "IF NEED", "IFNEEDBE"):
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def validate_doodle_structure(df):
     """
-    Check what key structural components of a Doodle export are present/missing.
+    Analyse a supposed Doodle export and report which key components are present.
     Returns:
         ok: bool
-        missing_items: list[str] where each string is one of REQUIRED_DOODLE_COMPONENTS
+        present_items: list[str]
+        missing_items: list[str]
     """
+    expected = {
+        "structure": "enough rows and columns (at least 6 rows and 3 columns)",
+        "day": "a day row with weekday labels (e.g., Mon, Tue, Wed)",
+        "time": "a time row with times (e.g., 9:00 AM or 09:00)",
+        "answers": "availability cells with answers YES / IF NEED BE",
+    }
+
+    has_structure = df.shape[0] >= MIN_ROWS and df.shape[1] > FIRST_COL
+    day_ser = _row_slice(df, DAY_ROW)
+    time_ser = _row_slice(df, TIME_ROW)
+    has_day = _looks_like_weekday_row(day_ser)
+    has_time = _looks_like_time_row(time_ser)
+    has_answers = _has_availability_answers(df)
+
+    present = []
     missing = []
 
-    # map indices for easier reference
-    DAY_ITEM   = REQUIRED_DOODLE_COMPONENTS[0]
-    TIME_ITEM  = REQUIRED_DOODLE_COMPONENTS[1]
-    STRUCT_ITEM = REQUIRED_DOODLE_COMPONENTS[2]
-    ANSWERS_ITEM = REQUIRED_DOODLE_COMPONENTS[3]
+    for key, desc in expected.items():
+        cond = {
+            "structure": has_structure,
+            "day": has_day,
+            "time": has_time,
+            "answers": has_answers,
+        }[key]
+        (present if cond else missing).append(desc)
 
-    # Basic size checks
-    if df.shape[0] < MIN_ROWS or df.shape[1] <= FIRST_COL:
-        if STRUCT_ITEM not in missing:
-            missing.append(STRUCT_ITEM)
+    ok = len(missing) == 0
+    return ok, present, missing
 
-    # Required rows exist?
-    has_day_row = DAY_ROW in df.index
-    has_time_row = TIME_ROW in df.index
 
-    if not has_day_row:
-        if DAY_ITEM not in missing:
-            missing.append(DAY_ITEM)
-    if not has_time_row:
-        if TIME_ITEM not in missing:
-            missing.append(TIME_ITEM)
-
-    # If rows exist, check if they actually have content
-    if has_day_row:
-        try:
-            day_series = df.loc[DAY_ROW, FIRST_COL:].fillna("").astype(str).str.strip()
-            if day_series.eq("").all():
-                if DAY_ITEM not in missing:
-                    missing.append(DAY_ITEM)
-        except Exception:
-            if DAY_ITEM not in missing:
-                missing.append(DAY_ITEM)
-
-    if has_time_row:
-        try:
-            time_series = df.loc[TIME_ROW, FIRST_COL:].fillna("").astype(str).str.strip()
-            if time_series.eq("").all():
-                if TIME_ITEM not in missing:
-                    missing.append(TIME_ITEM)
-        except Exception:
-            if TIME_ITEM not in missing:
-                missing.append(TIME_ITEM)
-
-    # Check for any availability (YES / IF NEED BE)
-    availability_found = False
-    try:
-        for i in range(6, len(df)):
-            row = df.iloc[i]
-            if df.shape[1] > FIRST_COL:
-                answers = row[FIRST_COL:]
-            else:
-                answers = []
-            for v in answers:
-                if isinstance(v, str) and v.strip().upper() in ("YES", "IF NEED BE", "IF NEEDED", "IF NEED", "IFNEEDBE"):
-                    availability_found = True
-                    break
-            if availability_found:
-                break
-    except Exception:
-        availability_found = False
-
-    if not availability_found:
-        if ANSWERS_ITEM not in missing:
-            missing.append(ANSWERS_ITEM)
-
-    return len(missing) == 0, missing
-
+def validate_member_info(mem_df):
+    """
+    Check if member-info sheet has the required columns.
+    Returns ok, present_cols, missing_cols.
+    """
+    cols = set(str(c) for c in mem_df.columns)
+    required = set(REQUIRED_MEM_COLS)
+    present = sorted([c for c in required if c in cols])
+    missing = sorted([c for c in required if c not in cols])
+    ok = len(missing) == 0
+    return ok, present, missing
 
 # -----------------------
 # Doodle preprocess + parse
@@ -217,7 +231,7 @@ def parse_doodle(table, skip_names=None, day_row=DAY_ROW, first_column=FIRST_COL
     # build slots (string combine)
     try:
         slots = (days + " " + times).tolist()
-    except Exception as e:
+    except Exception:
         # fallback: elementwise combine with safe handling
         slots = []
         maxlen = max(len(days), len(times))
@@ -588,61 +602,69 @@ if st.button("Run Scheduling"):
         int_clean = os.path.join(tmp, "int_clean.xlsx")
 
         # -----------------------------------------
-        # NEW: Structural validation BEFORE cleaning
+        # Structural validation BEFORE cleaning - Doodle files
         # -----------------------------------------
-        required_desc = REQUIRED_DOODLE_COMPONENTS
-
-        # Candidates doodle
         try:
             raw_cand = pd.read_excel(cand_path, header=None)
         except Exception:
             st.error("Candidates Doodle: could not read the file. Please upload a valid Excel export from Doodle.")
             st.stop()
 
-        ok_cand, missing_cand = validate_doodle_structure(raw_cand)
+        ok_cand, present_cand, missing_cand = validate_doodle_structure(raw_cand)
         if not ok_cand:
-            missing_text = "\n- " + "\n- ".join(missing_cand)
-            present = [d for d in required_desc if d not in missing_cand]
-            if len(missing_cand) == len(required_desc):
+            if not present_cand:  # file basically empty / nothing matches
                 st.error(
-                    "Candidates Doodle: your file does not contain the required structure.\n\n"
-                    "It **should contain**:\n- " + "\n- ".join(required_desc) +
-                    "\n\nYour current file doesn't contain these criteria. Please upload the correct Doodle export."
+                    "Candidates Doodle: your file does not contain the required Doodle structure.\n\n"
+                    "It **should contain**:\n"
+                    "- enough rows and columns (at least 6 rows and 3 columns)\n"
+                    "- a day row with weekday labels (e.g., Mon, Tue, Wed)\n"
+                    "- a time row with times (e.g., 9:00 AM or 09:00)\n"
+                    "- availability cells with answers YES / IF NEED BE"
                 )
             else:
-                present_text = "\n- " + "\n- ".join(present) if present else " (none detected)"
                 st.error(
                     "Candidates Doodle: this document is not in the expected Doodle format.\n\n"
-                    "A correct Doodle file **should contain**:\n- " + "\n- ".join(required_desc) +
-                    "\n\nYour current file **seems to contain**:\n" + present_text +
-                    "\n\nBut it is **missing**:\n" + missing_text
+                    "It **should contain** all of the following:\n"
+                    "- enough rows and columns (at least 6 rows and 3 columns)\n"
+                    "- a day row with weekday labels (e.g., Mon, Tue, Wed)\n"
+                    "- a time row with times (e.g., 9:00 AM or 09:00)\n"
+                    "- availability cells with answers YES / IF NEED BE\n\n"
+                    "Your file **seems to contain**:\n"
+                    + "".join(f"- {item}\n" for item in present_cand) +
+                    "\nBut it is **missing**:\n"
+                    + "".join(f"- {item}\n" for item in missing_cand)
                 )
             st.stop()
 
-        # Interviewers doodle
         try:
             raw_int = pd.read_excel(int_path, header=None)
         except Exception:
             st.error("Interviewers Doodle: could not read the file. Please upload a valid Excel export from Doodle.")
             st.stop()
 
-        ok_int, missing_int = validate_doodle_structure(raw_int)
+        ok_int, present_int, missing_int = validate_doodle_structure(raw_int)
         if not ok_int:
-            missing_text = "\n- " + "\n- ".join(missing_int)
-            present = [d for d in required_desc if d not in missing_int]
-            if len(missing_int) == len(required_desc):
+            if not present_int:
                 st.error(
-                    "Interviewers Doodle: your file does not contain the required structure.\n\n"
-                    "It **should contain**:\n- " + "\n- ".join(required_desc) +
-                    "\n\nYour current file doesn't contain these criteria. Please upload the correct Doodle export."
+                    "Interviewers Doodle: your file does not contain the required Doodle structure.\n\n"
+                    "It **should contain**:\n"
+                    "- enough rows and columns (at least 6 rows and 3 columns)\n"
+                    "- a day row with weekday labels (e.g., Mon, Tue, Wed)\n"
+                    "- a time row with times (e.g., 9:00 AM or 09:00)\n"
+                    "- availability cells with answers YES / IF NEED BE"
                 )
             else:
-                present_text = "\n- " + "\n- ".join(present) if present else " (none detected)"
                 st.error(
                     "Interviewers Doodle: this document is not in the expected Doodle format.\n\n"
-                    "A correct Doodle file **should contain**:\n- " + "\n- ".join(required_desc) +
-                    "\n\nYour current file **seems to contain**:\n" + present_text +
-                    "\n\nBut it is **missing**:\n" + missing_text
+                    "It **should contain** all of the following:\n"
+                    "- enough rows and columns (at least 6 rows and 3 columns)\n"
+                    "- a day row with weekday labels (e.g., Mon, Tue, Wed)\n"
+                    "- a time row with times (e.g., 9:00 AM or 09:00)\n"
+                    "- availability cells with answers YES / IF NEED BE\n\n"
+                    "Your file **seems to contain**:\n"
+                    + "".join(f"- {item}\n" for item in present_int) +
+                    "\nBut it is **missing**:\n"
+                    + "".join(f"- {item}\n" for item in missing_int)
                 )
             st.stop()
 
@@ -687,8 +709,24 @@ if st.button("Run Scheduling"):
             st.error(f"Member Info Sheet: {WRONG_FORMAT_MSG}")
             st.stop()
 
-        if not REQUIRED_MEM_COLS.issubset(set(mem_df.columns)):
-            st.error(f"Member Info Sheet: {WRONG_FORMAT_MSG}")
+        ok_mem, present_mem, missing_mem = validate_member_info(mem_df)
+        if not ok_mem:
+            if not present_mem:
+                st.error(
+                    "Member Info Sheet: your file does not contain the required columns.\n\n"
+                    "It **should contain** at least the following columns:\n"
+                    "- Member Name\n- Position\n- Semesters at NJC"
+                )
+            else:
+                st.error(
+                    "Member Info Sheet: this document is missing some required columns.\n\n"
+                    "It **should contain** the following columns:\n"
+                    "- Member Name\n- Position\n- Semesters at NJC\n\n"
+                    "Your file **currently has**:\n"
+                    + "".join(f"- {c}\n" for c in present_mem) +
+                    "\nBut it is **missing**:\n"
+                    + "".join(f"- {c}\n" for c in missing_mem)
+                )
             st.stop()
 
         # Additional robust checks to detect wrong file types early
