@@ -205,14 +205,11 @@ def fill_days_in_doodle(
     """
     table = pd.read_excel(doodle_path, header=None)
 
-    # Ensure we can access the header rows.
     if table.shape[0] <= day_row or table.shape[1] <= first_column:
         raise ValueError("Doodle file does not have enough rows/columns for day headers.")
 
-    # Extract day row from the header region we care about
     day_series = table.loc[day_row, first_column:]
 
-    # Normalise to strings and mark blanks as NA so ffill works nicely
     day_series = (
         day_series.fillna("")
         .astype(str)
@@ -221,14 +218,11 @@ def fill_days_in_doodle(
 
     cleaned = day_series.replace(["", " "], pd.NA)
 
-    # If everything is NA here, we can't build slots later
     if cleaned.isna().all():
         raise ValueError("Doodle day row appears to be empty after reading.")
 
-    # Forward-fill the days (classic Doodle export behaviour)
     filled = cleaned.ffill()
 
-    # Write back into the table and persist cleaned file
     table.loc[day_row, first_column:] = filled
     table.to_excel(doodle_cleaned_path, index=False, header=False)
 
@@ -241,26 +235,21 @@ def parse_doodle(table, skip_names=None, day_row=DAY_ROW, first_column=FIRST_COL
     if skip_names is None:
         skip_names = set()
 
-    # ensure rows exist
     if table.shape[0] <= time_row:
         raise ValueError("Doodle file missing expected rows for day/time headers.")
 
-    # Defensive extraction: convert to string and normalize
     try:
         days = table.loc[day_row, first_column:].fillna("").astype(str).str.strip()
         times = table.loc[time_row, first_column:].fillna("").astype(str).str.strip()
     except Exception as e:
         raise ValueError("Could not read day/time rows.") from e
 
-    # if either series is empty -> malformed
     if days.eq("").all() or times.eq("").all():
         raise ValueError("Doodle day or time row is empty or malformed.")
 
-    # build slots
     try:
         slots = (days + " " + times).tolist()
     except Exception:
-        # fallback: elementwise combine with safe handling
         slots = []
         maxlen = max(len(days), len(times))
         for i in range(maxlen):
@@ -269,8 +258,8 @@ def parse_doodle(table, skip_names=None, day_row=DAY_ROW, first_column=FIRST_COL
             slots.append(f"{d} {t}".strip())
 
     availability = {}
-    # people rows typically start at index 6; be resilient and scan rows 6..end
     skip_upper = {s.upper() for s in skip_names}
+
     for i in range(6, len(table)):
         name_cell = table.iloc[i, 0] if table.shape[1] > 0 else None
         if not isinstance(name_cell, str) or not name_cell.strip():
@@ -313,14 +302,12 @@ def classify_interviewers(interviewer_availability, member_info):
     interviewer_slots, interviewer_yes, interviewer_ifnb = {}, {}, {}
 
     for name, data in interviewer_availability.items():
-        # try exact match, then case-insensitive
         row = member_info[member_info["Member Name"] == name]
         if row.empty:
             lower_mask = member_info["Member Name"].astype(str).str.lower() == name.lower()
             row = member_info[lower_mask]
 
         if row.empty:
-            # unknown member -> treat as junior but keep availability
             juniors.append(name)
         else:
             position = str(row.iloc[0].get("Position", "")).lower()
@@ -396,11 +383,9 @@ def schedule_interviews(candidate_availability, seniors, juniors,
             return True
         day, minutes = slot_to_day_minutes(slot)
         if day is None or minutes is None:
-            # if we can't parse, don't block it
             return True
         for d_existing, m_existing in interviewer_calendar.get(name, []):
             if d_existing == day and abs(m_existing - minutes) <= 60:
-                # same day and within 60 minutes (including exact back-to-back)
                 return False
         return True
 
@@ -410,15 +395,12 @@ def schedule_interviews(candidate_availability, seniors, juniors,
             return
         interviewer_calendar.setdefault(name, []).append((day, minutes))
 
-    # -----------------------
     # Main scheduling loop
-    # -----------------------
     for candidate, cdata in candidate_availability.items():
         cand_slots_sorted = sort_slots(cdata.get("yes", []) + cdata.get("ifnb", []))
         allocated = False
 
         for slot in cand_slots_sorted:
-            # Filter lists with both availability and back-to-back constraint
             s_yes = [
                 s for s in seniors
                 if slot in interviewer_yes.get(s, set())
@@ -452,8 +434,8 @@ def schedule_interviews(candidate_availability, seniors, juniors,
                 S, J = s_yes[0], j_yes[0]
                 booked_s.setdefault(slot, set()).add(S)
                 booked_j.setdefault(slot, set()).add(J)
-                load[S] = load.get(S, 0) + 1
-                load[J] = load.get(J, 0) + 1
+                load[S] += 1
+                load[J] += 1
                 register_slot(S, slot)
                 register_slot(J, slot)
                 results.append({
@@ -471,8 +453,8 @@ def schedule_interviews(candidate_availability, seniors, juniors,
             if len(s_yes) >= 2:
                 S1, S2 = s_yes[:2]
                 booked_s.setdefault(slot, set()).update({S1, S2})
-                load[S1] = load.get(S1, 0) + 1
-                load[S2] = load.get(S2, 0) + 1
+                load[S1] += 1
+                load[S2] += 1
                 register_slot(S1, slot)
                 register_slot(S2, slot)
                 results.append({
@@ -494,8 +476,8 @@ def schedule_interviews(candidate_availability, seniors, juniors,
                 J = sorted(j_mix, key=lambda x: load.get(x, 0))[0]
                 booked_s.setdefault(slot, set()).add(S)
                 booked_j.setdefault(slot, set()).add(J)
-                load[S] = load.get(S, 0) + 1
-                load[J] = load.get(J, 0) + 1
+                load[S] += 1
+                load[J] += 1
                 register_slot(S, slot)
                 register_slot(J, slot)
                 results.append({
@@ -513,8 +495,8 @@ def schedule_interviews(candidate_availability, seniors, juniors,
             if len(s_mix) >= 2:
                 S1, S2 = sorted(s_mix, key=lambda x: load.get(x, 0))[:2]
                 booked_s.setdefault(slot, set()).update({S1, S2})
-                load[S1] = load.get(S1, 0) + 1
-                load[S2] = load.get(S2, 0) + 1
+                load[S1] += 1
+                load[S2] += 1
                 register_slot(S1, slot)
                 register_slot(S2, slot)
                 results.append({
@@ -533,8 +515,8 @@ def schedule_interviews(candidate_availability, seniors, juniors,
             if len(jj_mix) >= 2:
                 J1, J2 = sorted(jj_mix, key=lambda x: load.get(x, 0))[:2]
                 booked_j.setdefault(slot, set()).update({J1, J2})
-                load[J1] = load.get(J1, 0) + 1
-                load[J2] = load.get(J2, 0) + 1
+                load[J1] += 1
+                load[J2] += 1
                 register_slot(J1, slot)
                 register_slot(J2, slot)
                 results.append({
@@ -551,9 +533,7 @@ def schedule_interviews(candidate_availability, seniors, juniors,
         if allocated:
             scheduled_candidates.add(candidate)
 
-    # -------------------------------------------------------
     # Add PROBLEM rows for candidates that were not allocated
-    # -------------------------------------------------------
     for candidate, cdata in candidate_availability.items():
         if candidate in scheduled_candidates:
             continue
@@ -564,7 +544,6 @@ def schedule_interviews(candidate_availability, seniors, juniors,
         if not cand_slots:
             reason_detail = "NO RECORDED AVAILABILITY IN THE DOODLE FILE."
         else:
-            # Any overlap between candidate slots and interviewer slots?
             all_interviewer_slots = set().union(*interviewer_slots.values()) if interviewer_slots else set()
             overlap = cand_slots & all_interviewer_slots
             if not overlap:
@@ -679,13 +658,11 @@ def build_excel_calendar(assignments):
     Build simple table Day | Time | Candidate | Interviewers
     """
     df = pd.DataFrame(assignments)
-    # normalize names
     if "day" in df.columns and "Day" not in df.columns:
         df = df.rename(columns={"day": "Day"})
     if "time" in df.columns and "Time" not in df.columns:
         df = df.rename(columns={"time": "Time"})
 
-    # ensure columns exist
     for col in ["Day", "Time", "candidate", "interviewer"]:
         if col not in df.columns:
             df[col] = pd.NA
@@ -712,23 +689,51 @@ def build_excel_calendar(assignments):
 # Streamlit UI / Flow
 # -----------------------
 
-st.set_page_config(page_title="Interview Scheduler", layout="wide")
-st.title("📅 Interview Scheduling + Weekly Calendar")
+st.set_page_config(page_title="NJC Interview Scheduler", layout="wide")
+
+st.title("🎓 NJC Interview Scheduler")
 st.markdown(
-    "Upload the two Excel files exported from Doodle (candidates + interviewers) "
-    "and the Member Info sheet. You’ll get the schedule table, a weekly calendar, "
-    "and an interviewer summary. Any unscheduled candidates will be flagged."
+    "Welcome! This app helps you turn **Doodle availability exports** "
+    "into a balanced interview schedule, a weekly calendar, and interviewer summaries.\n\n"
+    "Any candidate we *cannot* place will be clearly flagged in the final table."
 )
+
+with st.expander("ℹ️ What files do I need? (quick overview)", expanded=True):
+    st.markdown(
+        """
+        **You will need three Excel files:**
+
+        1. **Candidates Doodle export (`.xlsx`)**  
+           - Exported **directly from Doodle** (no edits to the structure).  
+           - Each **row = one candidate**.  
+           - Columns from the third column onwards contain **YES / IF NEED BE** answers.  
+           - The organizer row like **“NJC”** is OK – the app will ignore it.
+
+        2. **Interviewers Doodle export (`.xlsx`)**  
+           - Also exported directly from Doodle.  
+           - Each **row = one interviewer**.  
+           - Same structure: days + times at the top, answers below.  
+           - The organizer row **“NJC”** is ignored here as well.
+
+        3. **Member Info sheet (`.xlsx`)**  
+           - A regular Excel table with at least these columns **as headers**:  
+             - `Member Name`  
+             - `Position`  
+             - `Semesters at NJC`  
+           - Used to classify **seniors vs juniors**.
+        """
+    )
+
+st.markdown("---")
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    cand_file = st.file_uploader("Upload Candidates Doodle", type=["xlsx"])
+    cand_file = st.file_uploader("📄 Upload *Candidates* Doodle", type=["xlsx"])
 with col2:
-    int_file = st.file_uploader("Upload Interviewers Doodle", type=["xlsx"])
+    int_file = st.file_uploader("👥 Upload *Interviewers* Doodle", type=["xlsx"])
 with col3:
-    mem_file = st.file_uploader("Upload Member Info Sheet", type=["xlsx"])
+    mem_file = st.file_uploader("📘 Upload Member Info Sheet", type=["xlsx"])
 
-# Back-to-back interviews option
 back_to_back_choice = st.radio(
     "Can interviewers do back-to-back interviews (e.g., one interview at 13:00 then another at 14:00)?",
     ["Yes", "No"],
@@ -736,10 +741,9 @@ back_to_back_choice = st.radio(
 )
 allow_back_to_back = (back_to_back_choice == "Yes")
 
-if st.button("Run Scheduling"):
-    # Basic file presence check
+if st.button("🚀 Run Scheduling"):
     if not (cand_file and int_file and mem_file):
-        st.error("Please upload all files.")
+        st.error("Please upload all three files before running the scheduler.")
         st.stop()
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -754,9 +758,7 @@ if st.button("Run Scheduling"):
         cand_clean = os.path.join(tmp, "cand_clean.xlsx")
         int_clean = os.path.join(tmp, "int_clean.xlsx")
 
-        # -----------------------------------------------------
-        # Structural validation BEFORE cleaning - Doodle files
-        # -----------------------------------------------------
+        # Structural validation – candidates
         try:
             raw_cand = pd.read_excel(cand_path, header=None)
         except Exception:
@@ -765,7 +767,7 @@ if st.button("Run Scheduling"):
 
         ok_cand, present_cand, missing_cand = validate_doodle_structure(raw_cand)
         if not ok_cand:
-            if not present_cand:  # file basically empty / nothing matches
+            if not present_cand:
                 st.error(
                     "Candidates Doodle: your file does not contain the required Doodle structure.\n\n"
                     "It **should contain**:\n"
@@ -789,6 +791,7 @@ if st.button("Run Scheduling"):
                 )
             st.stop()
 
+        # Structural validation – interviewers
         try:
             raw_int = pd.read_excel(int_path, header=None)
         except Exception:
@@ -821,9 +824,7 @@ if st.button("Run Scheduling"):
                 )
             st.stop()
 
-        # -----------------------------------------
         # Preprocess doodles (after structural check)
-        # -----------------------------------------
         try:
             fill_days_in_doodle(cand_path, cand_clean)
         except ValueError as e:
@@ -855,7 +856,7 @@ if st.button("Run Scheduling"):
             st.error(f"Interviewers Doodle: {WRONG_FORMAT_MSG}")
             st.stop()
 
-        # Read member info and validate columns
+        # Member info
         try:
             mem_df = pd.read_excel(mem_path)
         except Exception:
@@ -882,7 +883,7 @@ if st.button("Run Scheduling"):
                 )
             st.stop()
 
-        # Additional robust checks to detect wrong file types early
+        # Detect obvious wrong-file uploads
         if looks_like_member_sheet(cand_table):
             st.error(f"Candidates Doodle: Looks like a Member Info sheet was uploaded. {WRONG_FORMAT_MSG}")
             st.stop()
@@ -890,14 +891,13 @@ if st.button("Run Scheduling"):
             st.error(f"Interviewers Doodle: Looks like a Member Info sheet was uploaded. {WRONG_FORMAT_MSG}")
             st.stop()
 
-        # Validate day/time rows exist and have content (defensive)
+        # Validate that day/time rows exist and have content
         try:
             cand_days = cand_table.loc[DAY_ROW, FIRST_COL:].fillna("").astype(str).str.strip()
             cand_times = cand_table.loc[TIME_ROW, FIRST_COL:].fillna("").astype(str).str.strip()
         except Exception:
             st.error(f"Candidates Doodle: {WRONG_FORMAT_MSG}")
             st.stop()
-
         if cand_days.eq("").all() or cand_times.eq("").all():
             st.error(f"Candidates Doodle: {WRONG_FORMAT_MSG}")
             st.stop()
@@ -908,14 +908,12 @@ if st.button("Run Scheduling"):
         except Exception:
             st.error(f"Interviewers Doodle: {WRONG_FORMAT_MSG}")
             st.stop()
-
         if int_days.eq("").all() or int_times.eq("").all():
             st.error(f"Interviewers Doodle: {WRONG_FORMAT_MSG}")
             st.stop()
 
-        # Now parse doodles (guarded)
+        # Parse doodles (ignore NJC / Count / Total where appropriate)
         try:
-            # Skip NJC label rows and summary rows like "Count" / "Total"
             cand_av, _ = parse_doodle(cand_table, skip_names={"NJC", "Count", "Total"})
         except ValueError as e:
             st.error(f"Candidates Doodle: {WRONG_FORMAT_MSG} ({str(e)})")
@@ -929,7 +927,6 @@ if st.button("Run Scheduling"):
             st.stop()
 
         try:
-            # Skip NJC organizer row in interviewers too
             int_av, _ = parse_doodle(int_table, skip_names={"NJC"})
         except ValueError as e:
             st.error(f"Interviewers Doodle: {WRONG_FORMAT_MSG} ({str(e)})")
@@ -942,11 +939,10 @@ if st.button("Run Scheduling"):
             st.error(f"Interviewers Doodle: No valid interviewer availability found. {WRONG_FORMAT_MSG}")
             st.stop()
 
-        # Proceed with scheduling
+        # Scheduling
         seniors, juniors, inter_slots, inter_yes, inter_ifnb = classify_interviewers(int_av, mem_df)
         slot_strength, all_slots = compute_slot_strength(seniors, juniors, inter_slots)
 
-        # if no slots or no interviewers at all -> stop
         if not all_slots:
             st.error("No interviewer slots available after parsing. Check your Interviewers Doodle file.")
             st.stop()
@@ -958,7 +954,7 @@ if st.button("Run Scheduling"):
             allow_back_to_back=allow_back_to_back
         )
 
-        # Merge teams into single Senior / Junior columns
+        # Merge teams into Senior / Junior columns
         def merge_team(r):
             tt = r.get("Team Type", "")
             if "Senior + Junior" in tt:
@@ -982,13 +978,12 @@ if st.button("Run Scheduling"):
         else:
             merged = schedule.apply(lambda r: pd.Series(merge_team(r), index=["Senior", "Junior"]), axis=1)
             schedule = pd.concat([schedule, merged], axis=1)
-            # ensure columns exist
             for col in ["Candidate", "Email", "Slot", "Senior", "Junior", "Team Type"]:
                 if col not in schedule.columns:
                     schedule[col] = pd.NA
             final_schedule = schedule[["Candidate", "Email", "Slot", "Senior", "Junior", "Team Type"]]
 
-        # Interviewer workload + summary
+        # Workload + summary
         workload = {}
         summary_full = {}
 
@@ -1018,7 +1013,6 @@ if st.button("Run Scheduling"):
                     add_summary(row.get("Junior1"), row.get("Candidate"), row.get("Slot"))
                     add_summary(row.get("Junior2"), row.get("Candidate"), row.get("Slot"))
 
-        # workload DataFrame (guard empty)
         if not workload:
             workload_df = pd.DataFrame(columns=["Interviewer", "Total Interviews"])
         else:
@@ -1028,7 +1022,6 @@ if st.button("Run Scheduling"):
                 .reset_index(drop=True)
             )
 
-        # interviewer summary text
         summary_txt = io.StringIO()
         for interviewer in sorted(summary_full.keys()):
             summary_txt.write(f"{interviewer}:\n")
@@ -1036,7 +1029,7 @@ if st.button("Run Scheduling"):
                 summary_txt.write(f"  - {candidate}: {slot}\n")
             summary_txt.write("\n")
 
-        # Build assignments for calendar (only for rows with a real slot)
+        # Calendar assignments (only real slots)
         assignments = []
         for _, r in final_schedule.iterrows():
             if pd.isna(r["Slot"]) or not r["Slot"]:
@@ -1070,14 +1063,11 @@ if st.button("Run Scheduling"):
                         if d in present_days]
             if not weekdays:
                 weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-
             cal_df = build_weekly_calendar(assignments, weekdays=weekdays)
         else:
             cal_df = None
 
-        # -----------------------
-        # Display in tabs
-        # -----------------------
+        # Tabs
         tab_schedule, tab_workload, tab_summary, tab_calendar, tab_downloads = st.tabs([
             "Final Schedule Table",
             "Interviewer Workload",
@@ -1117,23 +1107,29 @@ if st.button("Run Scheduling"):
 
         with tab_downloads:
             st.subheader("⬇️ Downloads")
-            st.download_button("Download schedule.csv", final_schedule.to_csv(index=False), "schedule.csv", mime="text/csv")
+            st.download_button("Download schedule.csv", final_schedule.to_csv(index=False),
+                               "schedule.csv", mime="text/csv")
 
             try:
                 cal_buf = io.BytesIO()
                 with pd.ExcelWriter(cal_buf, engine='openpyxl') as writer:
                     excel_cal.to_excel(writer, index=False, sheet_name='Weekly Calendar')
                 cal_buf.seek(0)
-                st.download_button("Download calendar.xlsx", cal_buf.getvalue(),
-                                   file_name="calendar.xlsx",
-                                   mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                st.download_button(
+                    "Download calendar.xlsx",
+                    cal_buf.getvalue(),
+                    file_name="calendar.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
             except Exception:
-                st.download_button("Download calendar.csv", excel_cal.to_csv(index=False), "calendar.csv", mime="text/csv")
+                st.download_button("Download calendar.csv", excel_cal.to_csv(index=False),
+                                   "calendar.csv", mime="text/csv")
 
             st.download_button("Download interviewer_summary_full.txt", summary_txt.getvalue(),
                                "interviewer_summary_full.txt", mime="text/plain")
 
         st.success("Done — schedule, calendar, summaries, and problem flags generated 🎉")
+
 
 
 
