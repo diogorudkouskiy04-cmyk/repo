@@ -718,9 +718,10 @@ with st.expander("ℹ️ What files do I need? (quick overview)", expanded=True)
         3. **Member Info sheet (`.xlsx`)**  
            - A regular Excel table with at least these columns **as headers**:  
              - `Member Name`  
+             - `Member Email` 
              - `Position`  
              - `Semesters at NJC`  
-           - Used to classify **seniors vs juniors**.
+           - Used to classify **seniors vs juniors** interviewers. 
         """
     )
 
