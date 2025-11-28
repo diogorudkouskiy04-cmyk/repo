@@ -663,7 +663,7 @@ def build_excel_calendar(assignments):
     if "time" in df.columns and "Time" not in df.columns:
         df = df.rename(columns={"time": "Time"})
 
-    for col in ["Day", "Time", "candidate", "interviewer"]:
+    for col in ["Day", "Time", "Candidate", "Interviewer"]:
         if col not in df.columns:
             df[col] = pd.NA
 
@@ -682,7 +682,7 @@ def build_excel_calendar(assignments):
     df["TimeMinutes"] = df["Time"].apply(time_to_minutes)
     df = df.sort_values(["DayOrder", "TimeMinutes"]).reset_index(drop=True)
     df = df.drop(columns=["DayOrder", "TimeMinutes"])
-    df = df[["Day", "Time", "candidate", "interviewer"]]
+    df = df[["Day", "Time", "Candidate", "Interviewer"]]
     return df
 
 # -----------------------
