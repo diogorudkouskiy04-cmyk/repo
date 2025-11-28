@@ -929,12 +929,13 @@ if st.button("Run Scheduling"):
             st.stop()
 
         try:
-            int_av, _ = parse_doodle(int_table)
+            # Skip NJC organizer row in interviewers too
+            int_av, _ = parse_doodle(int_table, skip_names={"NJC"})
         except ValueError as e:
             st.error(f"Interviewers Doodle: {WRONG_FORMAT_MSG} ({str(e)})")
             st.stop()
         except Exception:
-            st.error(f"Interviewers Doodle: {WRONG_FORMATMSG}")
+            st.error(f"Interviewers Doodle: {WRONG_FORMAT_MSG}")
             st.stop()
 
         if not int_av:
@@ -1133,5 +1134,6 @@ if st.button("Run Scheduling"):
                                "interviewer_summary_full.txt", mime="text/plain")
 
         st.success("Done — schedule, calendar, summaries, and problem flags generated 🎉")
+
 
 
