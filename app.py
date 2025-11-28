@@ -270,12 +270,13 @@ def parse_doodle(table, skip_names=None, day_row=DAY_ROW, first_column=FIRST_COL
 
     availability = {}
     # people rows typically start at index 6; be resilient and scan rows 6..end
+    skip_upper = {s.upper() for s in skip_names}
     for i in range(6, len(table)):
         name_cell = table.iloc[i, 0] if table.shape[1] > 0 else None
         if not isinstance(name_cell, str) or not name_cell.strip():
             continue
         name_clean = name_cell.strip()
-        if name_clean.upper() in {s.upper() for s in skip_names}:
+        if name_clean.upper() in skip_upper:
             continue
 
         email = table.iloc[i, 1] if table.shape[1] > 1 else None
@@ -914,7 +915,8 @@ if st.button("Run Scheduling"):
 
         # Now parse doodles (guarded)
         try:
-            cand_av, _ = parse_doodle(cand_table, skip_names={"NJC"})
+            # Skip NJC label rows and summary rows like "Count" / "Total"
+            cand_av, _ = parse_doodle(cand_table, skip_names={"NJC", "Count", "Total"})
         except ValueError as e:
             st.error(f"Candidates Doodle: {WRONG_FORMAT_MSG} ({str(e)})")
             st.stop()
@@ -932,7 +934,7 @@ if st.button("Run Scheduling"):
             st.error(f"Interviewers Doodle: {WRONG_FORMAT_MSG} ({str(e)})")
             st.stop()
         except Exception:
-            st.error(f"Interviewers Doodle: {WRONG_FORMAT_MSG}")
+            st.error(f"Interviewers Doodle: {WRONG_FORMATMSG}")
             st.stop()
 
         if not int_av:
@@ -1131,4 +1133,5 @@ if st.button("Run Scheduling"):
                                "interviewer_summary_full.txt", mime="text/plain")
 
         st.success("Done — schedule, calendar, summaries, and problem flags generated 🎉")
+
 
